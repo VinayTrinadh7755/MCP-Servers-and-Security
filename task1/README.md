@@ -7,7 +7,7 @@ stream.
 
 ## Quick Start
 
-Run these two PowerShell commands from the repository root:
+Run these two PowerShell lines (four commands) from the repository root:
 
 ```powershell
 py -3.11-64 -m venv .venv; .\.venv\Scripts\python.exe -m pip install -r requirements.txt
