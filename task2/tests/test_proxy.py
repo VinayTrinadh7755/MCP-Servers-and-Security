@@ -73,3 +73,51 @@ async def test_rejects_malformed_and_batch_requests_without_forwarding() -> None
     assert malformed.json()["error"]["code"] == -32700
     assert batch.json()["error"]["code"] == -32600
     assert upstream.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("authorization", [None, "Bearer token-viewer-001", "Bearer unknown"])
+async def test_blocks_privileged_call_before_forwarding(authorization: str | None) -> None:
+    upstream = RecordingUpstream()
+    app.state.upstream = upstream
+    headers = {"authorization": authorization} if authorization else {}
+    body = {
+        "jsonrpc": "2.0",
+        "id": "blocked-1",
+        "method": "tools/call",
+        "params": {"name": "admin_reset_key", "arguments": {}},
+    }
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://gateway"
+    ) as client:
+        response = await client.post("/mcp", json=body, headers=headers)
+
+    assert response.json() == {
+        "jsonrpc": "2.0",
+        "id": "blocked-1",
+        "error": {"code": -32001, "message": "Unauthorized Tool Call"},
+    }
+    assert upstream.calls == []
+
+
+@pytest.mark.asyncio
+async def test_admin_privileged_call_reaches_downstream() -> None:
+    upstream = RecordingUpstream()
+    app.state.upstream = upstream
+    body = {
+        "jsonrpc": "2.0",
+        "id": 9,
+        "method": "tools/call",
+        "params": {"name": "admin_delete_tenant", "arguments": {}},
+    }
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://gateway"
+    ) as client:
+        response = await client.post(
+            "/mcp", json=body, headers={"authorization": "Bearer token-admin-001"}
+        )
+
+    assert response.json()["id"] == 9
+    assert len(upstream.calls) == 1

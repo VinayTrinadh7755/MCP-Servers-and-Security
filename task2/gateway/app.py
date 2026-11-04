@@ -8,6 +8,8 @@ from typing import Any, AsyncIterator
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from task2.gateway.auth import resolve_identity
+from task2.gateway.policy import authorize
 from task2.gateway.upstream import UpstreamClient, UpstreamFailure
 
 
@@ -57,6 +59,24 @@ async def mcp(request: Request) -> JSONResponse:
     request_id = payload.get("id")
     if payload.get("jsonrpc") != "2.0" or not isinstance(payload.get("method"), str):
         return error_response(request_id, -32600, "Invalid Request")
+
+    identity = resolve_identity(request.headers.get("authorization"))
+    decision = authorize(
+        payload["method"],
+        payload.get("params"),
+        identity.role if identity else None,
+    )
+    logger.info(
+        "event=authorization subject=%s role=%s method=%s tool=%s outcome=%s reason=%s",
+        identity.subject if identity else "anonymous",
+        identity.role if identity else "none",
+        payload["method"],
+        decision.tool_name,
+        "allow" if decision.allowed else "deny",
+        decision.reason,
+    )
+    if not decision.allowed:
+        return error_response(request_id, -32001, "Unauthorized Tool Call")
 
     try:
         response_payload = await request.app.state.upstream.forward(
