@@ -6,7 +6,8 @@ downstream_port="${DOWNSTREAM_PORT:-8001}"
 
 python -m uvicorn task2.downstream.mock_server:app --host 127.0.0.1 --port "$downstream_port" &
 downstream_pid=$!
-python -m uvicorn task2.gateway.app:app --host 127.0.0.1 --port "$gateway_port" &
+TASK2_DOWNSTREAM_URL="http://127.0.0.1:${downstream_port}" \
+  python -m uvicorn task2.gateway.app:app --host 127.0.0.1 --port "$gateway_port" &
 gateway_pid=$!
 
 cleanup() {
