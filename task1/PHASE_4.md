@@ -58,7 +58,8 @@ get_customer_record isError=False
 trigger_refund isError=False
 ```
 
-The equivalent POSIX commands are included in `task1/README.md`.
+The equivalent POSIX commands use `python3` and are included in
+`task1/README.md`.
 
 ## Clean-Environment Verification
 

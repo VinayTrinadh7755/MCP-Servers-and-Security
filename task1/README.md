@@ -31,7 +31,7 @@ ARM64 wheel was unavailable in the development environment.
 POSIX equivalent:
 
 ```bash
-python3.11 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
+python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python -m pytest task1/tests -q && .venv/bin/python task1/scripts/drive.py
 ```
 
