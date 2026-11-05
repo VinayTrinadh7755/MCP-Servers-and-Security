@@ -573,9 +573,12 @@ Forwarding the original bytes avoids unnecessarily rewriting valid requests. Par
 a331f3d test: harden gateway against authorization bypasses
 fc95cf1 fix: fail closed on unsupported MCP methods
 4396538 docs: add Task 2 policy and threat model
+2842a4e fix: close Task 2 validation gaps
 ```
 
-The history intentionally preserves the security correction that changed unknown methods from forwarding behavior to fail-closed behavior.
+The history intentionally preserves the security corrections that changed unknown methods to fail closed and added strict wire validation, bounded upstream responses, live-process integration coverage, correlated diagnostics, and native Windows startup.
+
+Four deliberate mutation checks were also run after remediation. Disabling the privileged-prefix rule failed `test_non_admin_cannot_call_privileged_tool`; bypassing the pre-forward denial failed `test_blocks_privileged_call_before_forwarding`; removing duplicate-key detection failed `test_duplicate_name_key_is_rejected_without_forwarding`; and removing the response-size guard failed `test_rejects_downstream_response_over_configured_limit`. Every mutation was reverted and the complete 54-test suite returned green.
 
 ## 14. Interview defense checklist
 
