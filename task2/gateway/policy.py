@@ -18,7 +18,7 @@ def authorize(method: str, params: Any, role: str | None) -> Decision:
         return Decision(True, "tool_discovery")
 
     if method != "tools/call":
-        return Decision(True, "non_tool_method")
+        return Decision(False, "unsupported_method")
 
     if not isinstance(params, dict):
         return Decision(False, "missing_params")

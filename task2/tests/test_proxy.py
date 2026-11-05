@@ -135,3 +135,23 @@ async def test_admin_privileged_call_reaches_downstream() -> None:
 
     assert response.json()["id"] == 9
     assert len(upstream.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_unknown_method_fails_closed_without_forwarding() -> None:
+    upstream = RecordingUpstream()
+    app.state.upstream = upstream
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://gateway"
+    ) as client:
+        response = await client.post(
+            "/mcp", json={"jsonrpc": "2.0", "id": 10, "method": "resources/list"}
+        )
+
+    assert response.json() == {
+        "jsonrpc": "2.0",
+        "id": 10,
+        "error": {"code": -32601, "message": "Method not found"},
+    }
+    assert upstream.calls == []

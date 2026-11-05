@@ -24,6 +24,12 @@ def test_admin_can_call_privileged_tool() -> None:
     assert authorize("tools/call", {"name": "admin_reset_key"}, "admin").allowed is True
 
 
+def test_unknown_method_fails_closed() -> None:
+    decision = authorize("resources/list", None, "admin")
+    assert decision.allowed is False
+    assert decision.reason == "unsupported_method"
+
+
 @pytest.mark.parametrize("role", [None, "viewer", "admin"])
 def test_ordinary_tools_and_listing_are_allowed(role: str | None) -> None:
     assert authorize("tools/list", None, role).allowed is True

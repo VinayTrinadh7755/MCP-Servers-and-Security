@@ -126,6 +126,8 @@ async def mcp(request: Request) -> JSONResponse:
         decision.reason,
     )
     if not decision.allowed:
+        if decision.reason == "unsupported_method":
+            return error_response(request_id, -32601, "Method not found")
         return error_response(request_id, -32001, "Unauthorized Tool Call")
 
     try:
