@@ -3,7 +3,8 @@ from dataclasses import dataclass
 from typing import Any
 
 
-TOOL_NAME = re.compile(r"[A-Za-z0-9_-]+", re.ASCII)
+MAX_TOOL_NAME_LENGTH = 128
+TOOL_NAME = re.compile(rf"[A-Za-z0-9_-]{{1,{MAX_TOOL_NAME_LENGTH}}}", re.ASCII)
 
 
 @dataclass(frozen=True)

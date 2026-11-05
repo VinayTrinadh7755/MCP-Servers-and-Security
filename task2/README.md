@@ -18,11 +18,17 @@ python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python -m pytest task2/tests -q
 ```
 
-The expected result is `40 passed`. The tests use in-process HTTP transports and do not require open ports.
+The expected result is `54 passed`. The suite includes unit tests plus subprocess-level gateway/downstream integration tests using ephemeral local ports.
 
 ## Run the gateway
 
-After installing dependencies, start both services from the repository root:
+After installing dependencies, Windows PowerShell can start both services natively:
+
+```powershell
+.\task2\scripts\run_both.ps1
+```
+
+Use `-GatewayPort 18000 -DownstreamPort 18001` to override occupied ports. On Linux, macOS, Git Bash, or WSL:
 
 ```bash
 . .venv/bin/activate && bash task2/scripts/run_both.sh
@@ -34,22 +40,24 @@ The gateway listens on `127.0.0.1:8000`; the downstream listens on `127.0.0.1:80
 GATEWAY_PORT=18000 DOWNSTREAM_PORT=18001 bash task2/scripts/run_both.sh
 ```
 
-The gateway's downstream URL can also be set directly with `TASK2_DOWNSTREAM_URL`. `TASK2_MAX_BODY_BYTES` changes the default 65,536-byte request limit.
+The gateway's downstream URL can also be set directly with `TASK2_DOWNSTREAM_URL`. `TASK2_MAX_BODY_BYTES` changes the default 65,536-byte request limit; `TASK2_MAX_RESPONSE_BYTES` changes the default 1 MiB downstream-response limit; and `TASK2_UPSTREAM_READ_TIMEOUT` changes the default five-second read timeout.
 
 Demo credentials are deliberately static fixtures, not production secrets:
 
 - `Bearer token-admin-001` resolves to `admin`.
 - `Bearer token-viewer-001` resolves to `viewer`.
 - An absent, malformed, duplicated, or unknown credential resolves to no role.
+- The `Bearer` scheme is matched case-insensitively as required by HTTP authentication syntax.
 
 Example calls:
 
 ```bash
 curl -s http://127.0.0.1:8000/mcp -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 curl -s http://127.0.0.1:8000/mcp -H 'content-type: application/json' -H 'authorization: Bearer token-viewer-001' -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"admin_reset_key","arguments":{}}}'
+curl -s http://127.0.0.1:8000/mcp -H 'content-type: application/json' -H 'authorization: Bearer token-admin-001' -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"admin_reset_key","arguments":{}}}'
 ```
 
-The second call returns HTTP 200 with JSON-RPC error `-32001` and message `Unauthorized Tool Call`. JSON-RPC owns the application error, so the HTTP transport remains successful and MCP clients receive a protocol-native response.
+The second call returns HTTP 200 with JSON-RPC error `-32001` and message `Unauthorized Tool Call`. The third returns `Executed admin_reset_key`. JSON-RPC owns the application error, so the HTTP transport remains successful and MCP clients receive a protocol-native response.
 
 ## Authorization policy
 
@@ -64,13 +72,15 @@ The gateway supports only the assessment's two MCP methods and otherwise fails c
 | `tools/call` | Missing, non-string, non-ASCII, or malformed | Any | Block with `-32001` |
 | Any other method | Not applicable | Any | Block with `-32601` |
 
-Tool names are restricted to ASCII letters, digits, underscores, and hyphens. The gateway does not trim or Unicode-normalize a name because silently transforming an authorization input could make the gateway and downstream authorize different strings.
+Tool names are restricted to 1–128 ASCII letters, digits, underscores, and hyphens. The gateway does not trim or Unicode-normalize a name because silently transforming an authorization input could make the gateway and downstream authorize different strings.
 
 ## Request and failure handling
 
-The raw request body is retained for forwarding, while a parsed copy drives policy. Duplicate JSON object keys are rejected because different parsers may choose different values, creating a request-smuggling gap. JSON-RPC arrays are rejected because MCP no longer supports batching. Request bodies are read incrementally with a fixed upper bound before parsing.
+The endpoint requires `Content-Type: application/json`. The raw request body is retained for forwarding, while a parsed copy drives policy. Duplicate JSON object keys are rejected because different parsers may choose different values, creating a request-smuggling gap. JSON-RPC arrays are rejected because MCP no longer supports batching. IDs are limited to string, number, or null. Request bodies are read incrementally with a fixed upper bound before parsing.
 
-A single shared `httpx.AsyncClient` provides connection pooling and explicit connect, read, write, and pool timeouts. Environment proxy settings are disabled for this internal hop. An unreachable downstream, HTTP failure, malformed downstream JSON, or non-object response becomes `-32603 Downstream service unavailable`; internal URLs, ports, exception types, and response bodies never reach the client. Request IDs, including `0` and strings, are preserved on all paths where the request can be parsed.
+A single shared `httpx.AsyncClient` provides connection pooling and explicit connect, read, write, and pool timeouts. Environment proxy settings are disabled for this internal hop. Downstream responses are streamed into a bounded 1 MiB buffer before JSON parsing. An unreachable downstream, timeout, oversized response, HTTP failure, malformed JSON, or non-object response becomes `-32603 Downstream service unavailable`; internal details never reach the client. Every gateway error returns an `X-Request-ID` header that is present in the diagnostic log alongside the JSON-RPC ID. Request IDs, including `0` and strings, are preserved on all paths where the request can be parsed.
+
+Only Content-Type is copied from the client to the downstream. Authorization, forwarding headers, internal-auth headers, Host, and User-Agent are not passed through; HTTPX supplies hop-specific values and rewrites Host. The downstream must be network-isolated in production because it does not independently prove a request passed through this gateway.
 
 ## Threat model and bypass results
 
@@ -87,10 +97,13 @@ The protected asset is privileged downstream tool execution. The trust boundary 
 | Two Authorization headers | Exactly-one-header requirement | Privileged call blocked |
 | Ordinary plus privileged batch | Top-level object requirement | Entire batch rejected |
 | Oversized or malformed JSON | Bounded reader and parse handling | Rejected without forwarding |
+| Object, array, or boolean JSON-RPC ID | ID type validation | Rejected without forwarding |
+| Missing or non-JSON Content-Type | Media-type validation | Rejected without forwarding |
+| Tool name longer than 128 characters | Bounded name grammar | Rejected without forwarding |
 | Unknown MCP method | Explicit method allowlist | Rejected without forwarding |
 | Denied privileged call | Decision precedes upstream call | Upstream call count remains zero |
 
-Tests assert both the client response and the downstream call count. A correct-looking `-32001` response is insufficient if the privileged side effect already happened.
+Tests assert both the client response and the downstream call count. A permanent live integration test starts both real Uvicorn processes, sends allowed and denied traffic, and verifies the downstream audit file. It also races 100 calls to detect ID crossover. A correct-looking `-32001` response is insufficient if the privileged side effect already happened.
 
 ## Design decisions
 
@@ -106,5 +119,6 @@ Prefix matching satisfies the assessment but is a brittle long-term authorizatio
 - There is one downstream and no discovery or routing. Production would route by server identity with separate connection pools, health checks, and policy per destination.
 - Policy and request limits are process-local configuration. Production would load versioned policy centrally and emit auditable policy-version identifiers.
 - The mock downstream is intentionally simple and is not a complete MCP implementation. It exists to exercise JSON-RPC forwarding and prove denied calls never arrive.
-- Logging records subject, resolved role, method, tool name, result, and reason, but never the token. Production would add request correlation, metrics for deny rate and downstream latency, and structured export to an observability platform.
+- Logging records a correlation ID, JSON-RPC ID, subject, resolved role, method, tool name, result, and reason, but never the token. Production would add metrics for deny rate and downstream latency and structured export to an observability platform.
+- A timeout closes the gateway's downstream connection. The live test proves a cooperative downstream observes the disconnect and abandons work; arbitrary providers must implement their own cancellation semantics because an HTTP client cannot force remote application code to stop.
 - HTTP is used locally. A zero-trust deployment should use TLS or mTLS on the internal hop, authenticate the downstream, restrict egress, and prevent clients from reaching the downstream directly.

@@ -75,7 +75,9 @@ async def test_duplicate_name_key_is_rejected_without_forwarding() -> None:
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://gateway"
     ) as client:
-        response = await client.post("/mcp", content=body)
+        response = await client.post(
+            "/mcp", content=body, headers={"content-type": "application/json"}
+        )
 
     assert response.json()["error"]["code"] == -32600
     assert upstream.calls == []
@@ -121,7 +123,9 @@ async def test_oversized_body_is_rejected_before_parsing_or_forwarding() -> None
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://gateway"
     ) as client:
-        response = await client.post("/mcp", content=body)
+        response = await client.post(
+            "/mcp", content=body, headers={"content-type": "application/json"}
+        )
 
     assert response.json() == {
         "jsonrpc": "2.0",
@@ -149,3 +153,23 @@ async def test_similar_non_privileged_name_remains_allowed() -> None:
 
     assert response.json()["result"]["forwarded"] is True
     assert len(upstream.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_json_unicode_escape_decodes_then_privileged_prefix_is_blocked() -> None:
+    upstream = RecordingUpstream()
+    app.state.upstream = upstream
+    body = (
+        b'{"jsonrpc":"2.0","id":9,"method":"tools/call","params":'
+        b'{"name":"\\u0061dmin_reset_key","arguments":{}}}'
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://gateway"
+    ) as client:
+        response = await client.post(
+            "/mcp", content=body, headers={"content-type": "application/json"}
+        )
+
+    assert response.json()["error"]["code"] == -32001
+    assert upstream.calls == []

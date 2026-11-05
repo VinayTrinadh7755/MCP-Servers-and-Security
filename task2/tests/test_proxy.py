@@ -65,7 +65,9 @@ async def test_rejects_malformed_and_batch_requests_without_forwarding() -> None
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://gateway"
     ) as client:
-        malformed = await client.post("/mcp", content=b"{bad")
+        malformed = await client.post(
+            "/mcp", content=b"{bad", headers={"content-type": "application/json"}
+        )
         batch = await client.post(
             "/mcp",
             json=[
@@ -155,3 +157,77 @@ async def test_unknown_method_fails_closed_without_forwarding() -> None:
         "error": {"code": -32601, "message": "Method not found"},
     }
     assert upstream.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_id", [{"nested": 1}, [1, 2], True])
+async def test_rejects_non_json_rpc_id_types_without_forwarding(bad_id: object) -> None:
+    upstream = RecordingUpstream()
+    app.state.upstream = upstream
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://gateway"
+    ) as client:
+        response = await client.post(
+            "/mcp", json={"jsonrpc": "2.0", "id": bad_id, "method": "tools/list"}
+        )
+
+    assert response.json()["error"]["code"] == -32600
+    assert response.json()["id"] is None
+    assert upstream.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content_type", [None, "text/plain"])
+async def test_requires_json_content_type(content_type: str | None) -> None:
+    upstream = RecordingUpstream()
+    app.state.upstream = upstream
+    headers = {"content-type": content_type} if content_type else {}
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://gateway"
+    ) as client:
+        response = await client.post(
+            "/mcp",
+            content=b'{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
+            headers=headers,
+        )
+
+    assert response.json()["error"]["code"] == -32600
+    assert upstream.calls == []
+
+
+@pytest.mark.asyncio
+async def test_concurrent_responses_keep_ids_and_denies_off_upstream() -> None:
+    upstream = RecordingUpstream()
+    app.state.upstream = upstream
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://gateway"
+    ) as client:
+        async def send(index: int) -> tuple[str, int, object]:
+            allowed = index % 2 == 0
+            request_id = f"request-{index}"
+            response = await client.post(
+                "/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "search_orders" if allowed else "admin_reset_key",
+                        "arguments": {},
+                    },
+                },
+                headers={"authorization": "Bearer token-viewer-001"},
+            )
+            body = response.json()
+            return request_id, response.status_code, body["id"]
+
+        import asyncio
+
+        results = await asyncio.gather(*(send(index) for index in range(100)))
+
+    assert all(expected == actual for expected, _, actual in results)
+    assert all(status == 200 for _, status, _ in results)
+    assert len(upstream.calls) == 50

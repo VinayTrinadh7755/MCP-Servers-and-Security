@@ -17,6 +17,6 @@ def resolve_identity(authorization: str | None) -> Identity | None:
     if authorization is None:
         return None
     parts = authorization.split(" ")
-    if len(parts) != 2 or parts[0] != "Bearer" or not parts[1]:
+    if len(parts) != 2 or parts[0].casefold() != "bearer" or not parts[1]:
         return None
     return TOKEN_ROLES.get(parts[1])

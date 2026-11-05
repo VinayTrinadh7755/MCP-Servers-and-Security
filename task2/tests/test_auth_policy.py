@@ -8,7 +8,7 @@ def test_resolves_only_exact_bearer_credentials() -> None:
     assert resolve_identity("Bearer token-admin-001").role == "admin"
     assert resolve_identity("Bearer token-viewer-001").role == "viewer"
     assert resolve_identity(None) is None
-    assert resolve_identity("bearer token-admin-001") is None
+    assert resolve_identity("bearer token-admin-001").role == "admin"
     assert resolve_identity("Bearer unknown") is None
     assert resolve_identity("Bearer  token-admin-001") is None
 
@@ -42,3 +42,8 @@ def test_ordinary_tools_and_listing_are_allowed(role: str | None) -> None:
 )
 def test_malformed_or_ambiguous_tool_names_fail_closed(params: object) -> None:
     assert authorize("tools/call", params, "viewer").allowed is False
+
+
+def test_tool_name_length_is_bounded() -> None:
+    assert authorize("tools/call", {"name": "x" * 128}, "viewer").allowed is True
+    assert authorize("tools/call", {"name": "x" * 129}, "viewer").allowed is False

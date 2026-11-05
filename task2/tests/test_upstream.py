@@ -24,3 +24,21 @@ async def test_collapses_bad_downstream_responses(status: int, body: bytes) -> N
             await upstream.forward(b"{}", "application/json")
     finally:
         await upstream.close()
+
+
+@pytest.mark.asyncio
+async def test_rejects_downstream_response_over_configured_limit() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b'{"blob":"' + b"x" * 1_024 + b'"}')
+
+    upstream = UpstreamClient("http://downstream", max_response_bytes=128)
+    await upstream.close()
+    upstream._client = httpx.AsyncClient(
+        base_url="http://downstream", transport=httpx.MockTransport(handler)
+    )
+
+    try:
+        with pytest.raises(UpstreamFailure):
+            await upstream.forward(b"{}", "application/json")
+    finally:
+        await upstream.close()
