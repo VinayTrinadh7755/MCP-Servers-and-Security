@@ -67,7 +67,21 @@ async def test_rejects_malformed_and_batch_requests_without_forwarding() -> None
     ) as client:
         malformed = await client.post("/mcp", content=b"{bad")
         batch = await client.post(
-            "/mcp", json=[{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}]
+            "/mcp",
+            json=[
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": "search_orders", "arguments": {}},
+                },
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {"name": "admin_reset_key", "arguments": {}},
+                },
+            ],
         )
 
     assert malformed.json()["error"]["code"] == -32700

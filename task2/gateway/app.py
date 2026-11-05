@@ -19,11 +19,49 @@ logging.basicConfig(
     stream=sys.stderr,
 )
 logger = logging.getLogger("task2.gateway")
+DEFAULT_MAX_BODY_BYTES = 65_536
+
+
+class BodyTooLarge(Exception):
+    pass
+
+
+class DuplicateKey(Exception):
+    pass
+
+
+def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise DuplicateKey(key)
+        result[key] = value
+    return result
+
+
+async def read_limited_body(request: Request, limit: int) -> bytes:
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            if int(content_length) > limit or int(content_length) < 0:
+                raise BodyTooLarge
+        except ValueError as exc:
+            raise BodyTooLarge from exc
+
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > limit:
+            raise BodyTooLarge
+        body.extend(chunk)
+    return bytes(body)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     downstream_url = os.getenv("TASK2_DOWNSTREAM_URL", "http://127.0.0.1:8001")
+    app.state.max_body_bytes = int(
+        os.getenv("TASK2_MAX_BODY_BYTES", str(DEFAULT_MAX_BODY_BYTES))
+    )
     app.state.upstream = UpstreamClient(downstream_url)
     try:
         yield
@@ -47,9 +85,18 @@ async def health() -> dict[str, str]:
 
 @app.post("/mcp")
 async def mcp(request: Request) -> JSONResponse:
-    body = await request.body()
     try:
-        payload = json.loads(body)
+        body = await read_limited_body(
+            request,
+            getattr(request.app.state, "max_body_bytes", DEFAULT_MAX_BODY_BYTES),
+        )
+    except BodyTooLarge:
+        return error_response(None, -32600, "Invalid Request")
+
+    try:
+        payload = json.loads(body, object_pairs_hook=reject_duplicate_keys)
+    except DuplicateKey:
+        return error_response(None, -32600, "Invalid Request")
     except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
         return error_response(None, -32700, "Parse error")
 
@@ -60,7 +107,10 @@ async def mcp(request: Request) -> JSONResponse:
     if payload.get("jsonrpc") != "2.0" or not isinstance(payload.get("method"), str):
         return error_response(request_id, -32600, "Invalid Request")
 
-    identity = resolve_identity(request.headers.get("authorization"))
+    authorization_headers = request.headers.getlist("authorization")
+    identity = resolve_identity(
+        authorization_headers[0] if len(authorization_headers) == 1 else None
+    )
     decision = authorize(
         payload["method"],
         payload.get("params"),
