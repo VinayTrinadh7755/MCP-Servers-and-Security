@@ -96,7 +96,7 @@ number, is the submission's source of truth.
 
 ## Full validation status
 
-- Task 3 tests in working tree: **85 passed**.
+- Task 3 tests in the final remediated working tree: **101 passed**.
 - Task 3 tests in fresh clone: **85 passed**.
 - Fresh dependency installation: **PASS**.
 - Fresh benchmark execution: **PASS**.

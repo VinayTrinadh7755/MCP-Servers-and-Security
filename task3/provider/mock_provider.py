@@ -67,7 +67,14 @@ async def chat_completions(
 ) -> StreamingResponse:
     body = await request.json()
     selected = fixture or body.get("fixture", "plain")
-    if selected not in FIXTURES and selected not in {"disconnect", "malformed"}:
+    custom_text = body.get("text")
+    if custom_text is not None and not isinstance(custom_text, str):
+        custom_text = None
+    if (
+        selected not in FIXTURES
+        and selected not in {"disconnect", "malformed", "hang"}
+        and custom_text is None
+    ):
         selected = "plain"
 
     configured_size = chunk_size or int(body.get("chunk_size", os.getenv("TASK3_CHUNK_SIZE", "8")))
@@ -83,6 +90,10 @@ async def chat_completions(
     )
 
     async def events() -> AsyncIterator[bytes]:
+        if selected == "hang":
+            hang_ms = int(body.get("hang_ms", 60_000))
+            await asyncio.sleep(max(0, min(hang_ms, 60_000)) / 1000)
+            return
         if selected == "malformed":
             yield b"data: {not-json}\n\n"
             return
@@ -92,7 +103,8 @@ async def chat_completions(
             # Simulate an upstream generator failing after headers and one frame.
             raise RuntimeError("intentional mock provider disconnect")
 
-        for piece in split_text(FIXTURES[selected], configured_size):
+        content = custom_text if custom_text is not None else FIXTURES[selected]
+        for piece in split_text(content, configured_size):
             yield _sse(_delta(piece))
             await asyncio.sleep(configured_delay / 1000)
         yield _sse(_finish())

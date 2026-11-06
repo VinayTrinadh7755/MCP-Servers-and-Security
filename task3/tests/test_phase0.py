@@ -13,7 +13,7 @@ def test_card_fixture_defaults_support_one_character_frames() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("fixture", ["plain", "single", "empty", "email", "ssn", "card"])
+@pytest.mark.parametrize("fixture", list(FIXTURES))
 async def test_provider_emits_openai_sse_and_terminal_sentinel(fixture: str) -> None:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://provider") as client:
@@ -65,3 +65,34 @@ async def test_card_fixture_defaults_to_one_character_content_deltas() -> None:
     pieces = [frame["choices"][0]["delta"].get("content", "") for frame in frames]
     assert all(len(piece) == 1 for piece in pieces if piece)
     assert "".join(pieces) == FIXTURES["card"]
+
+
+@pytest.mark.asyncio
+async def test_malformed_fixture_emits_deliberately_invalid_data_frame() -> None:
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://provider") as client:
+        response = await client.post(
+            "/v1/chat/completions", json={"fixture": "malformed", "delay_ms": 0}
+        )
+    assert response.text == "data: {not-json}\n\n"
+
+
+@pytest.mark.asyncio
+async def test_hang_fixture_can_be_shortened_for_deterministic_validation() -> None:
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://provider") as client:
+        response = await client.post(
+            "/v1/chat/completions", json={"fixture": "hang", "hang_ms": 1}
+        )
+    assert response.status_code == 200
+    assert response.content == b""
+
+
+@pytest.mark.asyncio
+async def test_disconnect_fixture_raises_after_partial_body_in_process() -> None:
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://provider") as client:
+        with pytest.raises(RuntimeError, match="intentional mock provider disconnect"):
+            await client.post(
+                "/v1/chat/completions", json={"fixture": "disconnect", "delay_ms": 0}
+            )

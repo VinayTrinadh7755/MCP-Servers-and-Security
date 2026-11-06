@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from task3.gateway.app import guarded_relay
+from task3.gateway.app import guarded_relay, validate_stream_request
 from task3.gateway.redactor import REDACTION
 from task3.gateway.sse import DeltaGuardrail, MalformedSSE, SSEDecoder, encode_data
 
@@ -112,6 +112,18 @@ def test_usage_frame_is_preserved_and_terminal_is_not_duplicated() -> None:
     assert second.frames == []
 
 
+def test_sse_comment_and_event_only_fields_are_preserved() -> None:
+    guardrail = DeltaGuardrail()
+    assert guardrail.process(": ping").frames == [b": ping\n\n"]
+    assert guardrail.process("event: heartbeat").frames == [b"event: heartbeat\n\n"]
+
+
+def test_content_after_done_is_discarded() -> None:
+    guardrail = DeltaGuardrail()
+    guardrail.process("data: [DONE]")
+    assert guardrail.process(event_text(delta("must not appear"))).frames == []
+
+
 def test_empty_content_metadata_frame_is_preserved() -> None:
     guardrail = DeltaGuardrail()
     payload = delta("")
@@ -151,6 +163,7 @@ def test_request_scoped_instances_cannot_mix_tenants() -> None:
 class FakeResponse:
     def __init__(self) -> None:
         self.closed = False
+        self.headers = {"content-type": "text/event-stream; charset=utf-8"}
 
     async def __aenter__(self) -> "FakeResponse":
         return self
@@ -237,6 +250,47 @@ async def test_gateway_converts_malformed_upstream_to_error_and_done() -> None:
         frame
         async for frame in guarded_relay(
             b"{}", "http://provider", "application/json", MalformedClient  # type: ignore[arg-type]
+        )
+    ]
+    assert json.loads(frames[0].decode().splitlines()[0][6:])["error"]["type"] == "gateway_stream_error"
+    assert frames[-1] == b"data: [DONE]\n\n"
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    (
+        (b"not-json", "valid JSON"),
+        (b"[]", "JSON object"),
+        (b'{"stream":false}', "requires stream=true"),
+        (b'{"stream":"true"}', "stream must be a boolean"),
+        (b'{"stream":true,"n":2}', "exactly one choice"),
+    ),
+)
+def test_invalid_stream_controls_are_rejected_before_forwarding(body: bytes, message: str) -> None:
+    validated, error = validate_stream_request(body)
+    assert validated is None
+    assert error is not None and message in error
+
+
+def test_unknown_request_fields_are_preserved_and_stream_is_forced_true() -> None:
+    validated, error = validate_stream_request(b'{"model":"demo","extra":"kept"}')
+    assert error is None
+    assert json.loads(validated) == {"model": "demo", "extra": "kept", "stream": True}
+
+
+class WrongContentTypeClient(FakeClient):
+    def stream(self, *args: object, **kwargs: object) -> FakeResponse:
+        response = FakeResponse()
+        response.headers = {"content-type": "application/json"}
+        return response
+
+
+@pytest.mark.asyncio
+async def test_non_sse_provider_content_type_fails_closed() -> None:
+    frames = [
+        frame
+        async for frame in guarded_relay(
+            b"{}", "http://provider", "application/json", WrongContentTypeClient  # type: ignore[arg-type]
         )
     ]
     assert json.loads(frames[0].decode().splitlines()[0][6:])["error"]["type"] == "gateway_stream_error"

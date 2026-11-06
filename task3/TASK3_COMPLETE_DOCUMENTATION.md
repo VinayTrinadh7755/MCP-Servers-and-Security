@@ -28,7 +28,7 @@ native Windows and Bash launchers, and clean-clone validation.
 
 Final status:
 
-- Task 3 tests: **85 passed**.
+- Task 3 tests: **101 passed** after the final validation remediations.
 - Task 1 regression: **14 passed**.
 - Task 2 regression: **54 passed**.
 - Fresh-clone installation and Task 3 execution: **passed**.
@@ -435,7 +435,7 @@ Run the entire Task 3 suite:
 Final result:
 
 ```text
-85 passed
+101 passed
 ```
 
 ### 11.1 Provider tests
@@ -644,7 +644,8 @@ context and additional entity types, but adds inference cost and tail latency.
 
 A practical next iteration would:
 
-1. Add body, event-size, timeout, and concurrency limits.
+1. Add body, event-size, and concurrency limits; retain the existing
+   configurable 30-second upstream read timeout.
 2. Require authenticated clients and HTTPS provider destinations.
 3. Restrict outbound provider hosts.
 4. Store provider credentials in a managed secret store.

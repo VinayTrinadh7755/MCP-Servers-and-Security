@@ -35,6 +35,7 @@ and terminal sentinel rather than hanging.
   OpenAI-compatible provider. Client authorization is not forwarded.
 - `TASK3_CHUNK_SIZE`: provider default chunk size.
 - `TASK3_PROVIDER_DELAY_MS`: provider delay between chunks.
+- `TASK3_UPSTREAM_READ_TIMEOUT`: upstream read timeout in seconds; defaults to 30.
 - `TASK3_GATEWAY_PORT` and `TASK3_PROVIDER_PORT`: Bash launcher ports.
 - PowerShell ports are `-GatewayPort` and `-ProviderPort` parameters.
 
@@ -92,15 +93,16 @@ Run the reproducible benchmark from the repository root:
 .\.venv\Scripts\python.exe task3\scripts\benchmark.py
 ```
 
-The benchmark uses seven runs and reports medians. On the development Windows
-machine, the recorded Phase 3 run measured:
+The benchmark uses seven internal runs and reports medians. Five separate
+Windows benchmark processes during the final validation measured:
 
-- Pass-through compute TTFT: 0.0063 ms.
-- Guarded compute TTFT: 0.5610 ms.
-- Compute delta: 0.5547 ms.
+- Pass-through compute TTFT median: 0.0013 ms (0.0012–0.0015 ms).
+- Guarded compute TTFT median: 0.1500 ms (0.1465–0.1528 ms).
+- Compute delta median: 0.1488 ms (0.1452–0.1516 ms).
 - First guarded output after 8 frames of 32 characters.
 - Peak retained buffer over a 1 MiB stream: 255 characters.
-- Adversarial near-match regex throughput: 1.16 MiB/s.
+- Adversarial near-match throughput median: 3.84 MiB/s
+  (3.82–3.89 MiB/s).
 
 These are local measurements, not universal service-level guarantees. The
 compute delta sits below Quilr's published `<50 ms` enforcement reference, but
@@ -116,6 +118,30 @@ Tests prove that bound over a 1 MiB boundary-free token, 10,000 one-character
 frames, and repeated pattern-like text. Individually precompiled regexes are
 applied sequentially because a single alternation both benchmarked worse and
 failed the adjacent-PII invariant during development.
+
+### Short-response TTFT limitation
+
+Live measurement with clean alphabetic text, 10-character provider frames, and
+a 20 ms frame delay produced the following result:
+
+| Content length | First content | Total time | Content emitted at flush |
+|---:|---:|---:|---:|
+| 50 | 731.09 ms | 742.02 ms | 100% |
+| 150 | 856.61 ms | 857.73 ms | 100% |
+| 250 | 1303.30 ms | 1303.74 ms | 100% |
+
+The implementation is memory-bounded, but responses shorter than the
+255-character carry can be behaviorally equivalent to whole-response buffering.
+This is the primary unresolved latency trade-off. The maximum comes from the
+email contract: 64 local-part characters, `@`, and up to 191 domain characters,
+for 256 total. SSN and card patterns are much shorter.
+
+Reducing the maximum to 128 requires tightening the email regex itself; merely
+changing the declared bound would be unsafe. A candidate-aware implementation
+can release more text, but the shortcut “no `@` and no digit means safe” is not
+correct because an email local part can arrive before a later `@`. A safe
+candidate-aware design must retain a possible local-part suffix (up to 64
+characters) and separately track digit-pattern prefixes.
 
 ## Architecture and carry-over invariant
 
@@ -177,7 +203,9 @@ selectively invoked classifier.
 - Buffered unsafe text is discarded on upstream failure.
 - Client cancellation exits the HTTPX stream context and stops upstream
   consumption.
-- Response bytes are streamed; the complete model response is never retained.
+- Retained state is bounded independently of total response length. Short
+  responses may remain entirely in the carry until final flush, as quantified
+  in the performance section.
 
 This demonstration terminates TLS at the gateway and trusts the configured
 provider URL. Production deployment should require HTTPS, restrict outbound
@@ -214,7 +242,7 @@ The derived 255-character carry is simple, auditable, and memory-bounded, but
 conservative: every pattern pays for the longest email pattern. Per-pattern
 candidate tracking could release ordinary text earlier, at the cost of more
 state and a larger correctness surface. Before production, I would add request
-body and SSE-event size limits, configurable upstream timeouts, authentication,
+body and SSE-event size limits, authentication,
 metrics for TTFT and redaction counts, HTTPS destination allow-listing, and a
 second detection layer for contextual and international PII. I would validate
 those changes against recorded provider streams and load-test p95/p99 latency,
