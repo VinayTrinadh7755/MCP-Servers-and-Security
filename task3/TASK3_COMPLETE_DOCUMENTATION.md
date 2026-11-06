@@ -379,13 +379,14 @@ python3 -m venv .venv
 ### 10.2 Start both services on Windows
 
 ```powershell
-.\task3\scripts\run_both.ps1
+powershell.exe -ExecutionPolicy Bypass -File .\task3\scripts\run_both.ps1
 ```
 
 Custom ports:
 
 ```powershell
-.\task3\scripts\run_both.ps1 -GatewayPort 8200 -ProviderPort 8201
+powershell.exe -ExecutionPolicy Bypass -File .\task3\scripts\run_both.ps1 `
+  -GatewayPort 8200 -ProviderPort 8201
 ```
 
 ### 10.3 Start both services with Bash

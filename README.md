@@ -32,8 +32,8 @@ design decisions, and production trade-offs.
 ## Task 3 Quick Start
 
 ```powershell
-.\task3\scripts\run_both.ps1
-.\.venv\Scripts\python.exe task3\scripts\consume.py --fixture plain
+.\.venv\Scripts\python.exe -m pytest task3\tests -q
+.\.venv\Scripts\python.exe task3\scripts\benchmark.py
 ```
 
 See `task3/README.md` for streaming fixtures, configuration, and tests.

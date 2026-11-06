@@ -7,7 +7,7 @@ only to parsed OpenAI content deltas.
 ## Quick start
 
 ```powershell
-.\task3\scripts\run_both.ps1
+powershell.exe -ExecutionPolicy Bypass -File .\task3\scripts\run_both.ps1
 ```
 
 In a second terminal:
@@ -228,12 +228,15 @@ non-quadratic scaling guard.
 For a clean-clone rehearsal on Linux/macOS:
 
 ```bash
-git clone <repository-url> task3-review
-cd task3-review
+review_dir="$(mktemp -d)"
+git clone . "$review_dir"
+cd "$review_dir"
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python -m pytest task3/tests -q
 .venv/bin/python task3/scripts/benchmark.py
+cd /
+rm -rf "$review_dir"
 ```
 
 ## Trade-offs and what I would do next
