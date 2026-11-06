@@ -7,6 +7,8 @@ A Python project for building Model Context Protocol (MCP) servers.
 - [Task 1 — Customer Operations MCP Server](task1/README.md)
 - [Task 2 — MCP Security Gateway](task2/README.md)
 
+- [Task 3 — Streaming PII Guardrail](task3/README.md)
+
 ## Task 1 Quick Start
 
 ```powershell
@@ -26,3 +28,12 @@ py -3.11-64 -m venv .venv; .\.venv\Scripts\python.exe -m pip install -r requirem
 
 See `task2/README.md` for the policy matrix, threat model, live-service commands,
 design decisions, and production trade-offs.
+
+## Task 3 Quick Start
+
+```powershell
+.\task3\scripts\run_both.ps1
+.\.venv\Scripts\python.exe task3\scripts\consume.py --fixture plain
+```
+
+See `task3/README.md` for streaming fixtures, configuration, and tests.

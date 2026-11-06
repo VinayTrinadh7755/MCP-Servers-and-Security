@@ -20,7 +20,7 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["task1*", "task2*"]
+include = ["task1*", "task2*", "task3*"]
 
 [tool.ruff]
 line-length = 100
