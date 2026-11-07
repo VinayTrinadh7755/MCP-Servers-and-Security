@@ -1,9 +1,8 @@
 # Task 4 — Rate-Limiting and Model Fallback Router
 
-Phases 0 and 1 are complete. The project currently provides the durable SQLite
-foundation, deterministic provider fixtures, typed limiter/router contracts, and
-a gateway endpoint with one sanitized error format. The limiter and fallback
-behavior remain deliberate Phase 1 stubs; they are implemented in Phase 2.
+All phases are complete. The gateway provides a per-tenant 50,000-token sliding
+minute, atomic SQLite reservations, and bounded primary-to-secondary failover.
+The local provider fixtures make every scored path reproducible without credentials.
 
 ## Run
 
@@ -21,7 +20,7 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8200/v1/completions `
   -Body '{"prompt":"hello","max_tokens":50}'
 ```
 
-The Phase 1 response identifies `primary`. No provider call occurs until Phase 2.
+The response identifies the provider, actual usage, and whether fallback occurred.
 
 Run the controllable provider fixture separately when inspecting it:
 
@@ -34,7 +33,7 @@ The fixture routes are `/primary/v1/completions` and
 `/secondary/v1/completions`. Select `normal`, `429`, `hang`, `slow`, or `500`
 with `?mode=` or `TASK4_PRIMARY_MODE` / `TASK4_SECONDARY_MODE`.
 
-## Validate Phases 0–1
+## Validate
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest task4/tests -q
@@ -46,9 +45,55 @@ git diff --check
 `task4/data/usage.db`. Every connection enables WAL, a 5-second SQLite busy
 timeout, and foreign keys. Initialization is idempotent.
 
-## Phase boundary
+## Rate limiter
 
-The `TokenLimiter` currently allows all requests and `ModelRouter` always returns
-a primary stub response. Phase 2 replaces those bodies with atomic sliding-window
-reservation, reconciliation, provider calls, 3-second primary timeout, and
-fallback. Describing those behaviors as complete before then would be misleading.
+Admission estimates `ceil(len(prompt) / 4) + max_tokens`. `BEGIN IMMEDIATE`
+makes eviction, the tenant usage read, and reservation insert one atomic operation.
+Successful calls reconcile the reservation to actual usage; total provider failure
+releases it. Rows at or before `now - 60,000ms` expire, so the window slides rather
+than resetting on a clock boundary.
+
+Denied requests include `Retry-After`, `X-RateLimit-Limit-Tokens`, and
+`X-RateLimit-Remaining-Tokens`.
+
+## Failover decisions
+
+| Primary outcome | Action | Accounting | Client result |
+|---|---|---|---|
+| Success | return primary | reconcile actual | `200`, no fallback |
+| HTTP 429 | call secondary | reconcile secondary | secondary or sanitized `503` |
+| exceeds 3 seconds | cancel, call secondary | reconcile secondary | secondary or sanitized `503` |
+| other failure | fail closed | release | sanitized `503` |
+
+The secondary has an independent configurable 3-second timeout. Tests assert that
+the timed-out primary coroutine is cancelled, not abandoned.
+
+## Error contract
+
+Every failure returns `error.code`, `error.message`, and `error.request_id`.
+Upstream bodies, provider hosts, file paths, exception names, and tracebacks remain
+in request-correlated stderr logs and never enter client responses.
+
+## Configuration
+
+| Variable | Default |
+|---|---|
+| `TASK4_DATABASE_PATH` | `task4/data/usage.db` |
+| `TASK4_TOKEN_LIMIT` | `50000` |
+| `TASK4_PRIMARY_URL` | `http://127.0.0.1:8201/primary/v1/completions` |
+| `TASK4_SECONDARY_URL` | `http://127.0.0.1:8201/secondary/v1/completions` |
+| `TASK4_PRIMARY_TIMEOUT_SECONDS` | `3.0` |
+| `TASK4_SECONDARY_TIMEOUT_SECONDS` | `3.0` |
+
+## Trade-offs
+
+SQLite satisfies the explicit on-disk requirement and makes the admission
+transaction inspectable. It remains a single-node design: writers serialize,
+multiple hosts cannot share the file, and production scale needs an atomic shared
+store. Reconciliation can exceed the cap by one request when actual usage is above
+the estimate. Releasing timed-out attempts is tenant-fair but can undercount unseen
+provider work. Eviction stays on the admission path for submission simplicity;
+high-volume production traffic should move cleanup off the hot path.
+
+Track provider latency, 429s, timeouts, fallback rate, limiter denials, SQLite lock
+time, and estimate-versus-actual drift.
