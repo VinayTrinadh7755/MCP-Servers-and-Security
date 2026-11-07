@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import asyncio
 
 import httpx
 import pytest
@@ -103,3 +104,90 @@ async def test_database_failure_and_oversized_inputs_use_sanitized_errors(client
     serialized = failed.text.casefold()
     for forbidden in ("sqlite3", "operationalerror", "private", "usage.db", "locked"):
         assert forbidden not in serialized
+
+
+@pytest.mark.asyncio
+async def test_omitted_max_tokens_reserves_safe_default(client) -> None:
+    class FourThousandTokenRouter:
+        async def complete(self, request):
+            from task4.router import CompletionResult
+
+            assert request.max_tokens == 4_096
+            return CompletionResult("primary", "ok", 1, 4_000, False)
+
+    app.state.router = FourThousandTokenRouter()
+    app.state.limiter.limit = 50_000
+    admitted_actual = 0
+    statuses = []
+    for _ in range(30):
+        response = await client.post(
+            "/v1/completions",
+            headers={"x-tenant-key": "omitted-default"},
+            json={"prompt": "hello"},
+        )
+        statuses.append(response.status_code)
+        if response.status_code == 200:
+            admitted_actual += 4_001
+    assert statuses.count(200) == 12
+    assert statuses.count(429) == 18
+    assert admitted_actual == 48_012
+    assert admitted_actual <= 50_000
+
+
+@pytest.mark.asyncio
+async def test_tenant_key_boundaries_and_parameterization(client) -> None:
+    class SuccessRouter:
+        async def complete(self, request):
+            from task4.router import CompletionResult
+
+            return CompletionResult("primary", "ok", 1, 1, False)
+
+    app.state.router = SuccessRouter()
+    cases = [
+        ("", 401),
+        ("   ", 401),
+        ("x" * 10_000, 401),
+        ("bad\x00key", 401),
+        ("'; DROP TABLE token_usage;--", 200),
+        ("tenant-a", 200),
+        ("TENANT-A", 200),
+    ]
+    for key, expected in cases:
+        response = await client.post(
+            "/v1/completions",
+            headers={"x-tenant-key": key},
+            json={"prompt": "hello", "max_tokens": 1},
+        )
+        assert response.status_code == expected
+
+
+@pytest.mark.asyncio
+async def test_client_cancellation_releases_reservation(client) -> None:
+    started = asyncio.Event()
+
+    class HangingRouter:
+        async def complete(self, request):
+            started.set()
+            await asyncio.Event().wait()
+
+    app.state.router = HangingRouter()
+    call = asyncio.create_task(
+        client.post(
+            "/v1/completions",
+            headers={"x-tenant-key": "disconnecting-client"},
+            json={"prompt": "hello", "max_tokens": 100},
+        )
+    )
+    await asyncio.wait_for(started.wait(), timeout=1)
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+    connection = sqlite3.connect(app.state.limiter.path)
+    try:
+        count = connection.execute(
+            "SELECT COUNT(*) FROM token_usage WHERE tenant_key = ?",
+            ("disconnecting-client",),
+        ).fetchone()[0]
+    finally:
+        connection.close()
+    assert count == 0

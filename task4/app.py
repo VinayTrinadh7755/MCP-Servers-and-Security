@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -62,6 +63,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="Task 4 Rate-Limit and Fallback Gateway", lifespan=lifespan)
 MAX_BODY_BYTES = 65_536
 MAX_TENANT_KEY_LENGTH = 256
+DEFAULT_MAX_TOKENS = 4_096
 
 
 def gateway_error(
@@ -127,6 +129,7 @@ async def completions(request: Request) -> JSONResponse:
         tenant_key is None
         or not tenant_key.strip()
         or len(tenant_key) > MAX_TENANT_KEY_LENGTH
+        or any(ord(character) < 32 or ord(character) == 127 for character in tenant_key)
     ):
         return gateway_error(
             request_id, "MISSING_TENANT_KEY", "x-tenant-key header is required", 401
@@ -150,7 +153,7 @@ async def completions(request: Request) -> JSONResponse:
         return gateway_error(request_id, "INVALID_REQUEST", "Request body must be an object", 400)
 
     prompt = payload.get("prompt")
-    max_tokens = payload.get("max_tokens")
+    max_tokens = payload.get("max_tokens", DEFAULT_MAX_TOKENS)
     if (
         not isinstance(prompt, str)
         or not prompt
@@ -181,6 +184,10 @@ async def completions(request: Request) -> JSONResponse:
 
     try:
         result = await request.app.state.router.complete(CompletionRequest(prompt, max_tokens))
+    except asyncio.CancelledError:
+        await request.app.state.limiter.release(decision.request_id)
+        logger.info("event=client_cancelled request_id=%s reservation=released", request_id)
+        raise
     except ProviderFailure:
         await request.app.state.limiter.release(decision.request_id)
         logger.exception("event=providers_failed request_id=%s", request_id)

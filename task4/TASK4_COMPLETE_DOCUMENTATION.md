@@ -25,6 +25,7 @@ work is timeout-bounded, and errors cross one sanitized boundary.
 - Implemented a 60-second window with a 50,000-token default cap.
 - Used `BEGIN IMMEDIATE` for atomic eviction, usage read, and reservation insert.
 - Added estimate-before-call and actual-usage reconciliation.
+- Added a conservative 4,096-token default when `max_tokens` is omitted.
 - Added 429/3-second-timeout fallback and an independent secondary timeout.
 - Released reservations when neither provider produced a completion.
 - Proved that timeout cancels the primary coroutine.
@@ -32,6 +33,8 @@ work is timeout-bounded, and errors cross one sanitized boundary.
 ### Phase 3 — Hardening
 
 - Proved tenant isolation, exact-boundary eviction, and bounded row count.
+- Released reservations on client-task cancellation; abrupt process death leaves
+  the estimate charged until normal window eviction.
 - Added rate-limit and retry headers, request and tenant size bounds, strict
   provider response validation, and fail-closed malformed-response behavior.
 - Kept hosts, upstream bodies, paths, exception types, and tracebacks out of

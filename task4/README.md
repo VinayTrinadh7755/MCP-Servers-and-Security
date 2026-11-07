@@ -47,7 +47,8 @@ timeout, and foreign keys. Initialization is idempotent.
 
 ## Rate limiter
 
-Admission estimates `ceil(len(prompt) / 4) + max_tokens`. `BEGIN IMMEDIATE`
+Admission estimates `ceil(len(prompt) / 4) + max_tokens`. An omitted
+`max_tokens` safely defaults to 4,096. `BEGIN IMMEDIATE`
 makes eviction, the tenant usage read, and reservation insert one atomic operation.
 Successful calls reconcile the reservation to actual usage; total provider failure
 releases it. Rows at or before `now - 60,000ms` expire, so the window slides rather
@@ -55,6 +56,12 @@ than resetting on a clock boundary.
 
 Denied requests include `Retry-After`, `X-RateLimit-Limit-Tokens`, and
 `X-RateLimit-Remaining-Tokens`.
+
+Each request opens its own `aiosqlite` connection. The driver uses sqlite3's
+default isolation level (`""`), but no DML precedes the explicit transaction, so
+`BEGIN IMMEDIATE` is the transaction start. The concurrency suite adds a test-only
+scheduling yield after the usage read; replacing `BEGIN IMMEDIATE` with plain
+`BEGIN` then fails with `database is locked`, proving real lock contention.
 
 ## Failover decisions
 
@@ -94,6 +101,11 @@ store. Reconciliation can exceed the cap by one request when actual usage is abo
 the estimate. Releasing timed-out attempts is tenant-fair but can undercount unseen
 provider work. Eviction stays on the admission path for submission simplicity;
 high-volume production traffic should move cleanup off the hot path.
+
+A client-cancelled handler releases its reservation. An abrupt process kill cannot
+run cleanup, so the estimate remains charged until its 60-second row expires.
+SQLite's default WAL auto-checkpoint remains enabled; sustained production traffic
+should monitor WAL size and schedule explicit checkpoints if needed.
 
 Track provider latency, 429s, timeouts, fallback rate, limiter denials, SQLite lock
 time, and estimate-versus-actual drift.

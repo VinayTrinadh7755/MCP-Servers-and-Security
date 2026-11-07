@@ -35,22 +35,15 @@ class TokenLimiter:
         window_ms: int = 60_000,
         path: Path | str | None = None,
         clock_ms: Callable[[], int] | None = None,
+        race_probe_delay: float = 0.0,
     ) -> None:
         self.limit = limit
         self.window_ms = window_ms
         self.path = Path(path).resolve() if path is not None else database_path()
         self._clock_ms = clock_ms or (lambda: time.time_ns() // 1_000_000)
-        # Avoid burning SQLite busy-timeout intervals for coroutines in this process.
-        # BEGIN IMMEDIATE remains the cross-process correctness boundary.
-        self._write_lock = asyncio.Lock()
+        self._race_probe_delay = race_probe_delay
 
     async def try_reserve(self, tenant_key: str, estimated_tokens: int) -> Decision:
-        async with self._write_lock:
-            return await self._try_reserve_locked(tenant_key, estimated_tokens)
-
-    async def _try_reserve_locked(
-        self, tenant_key: str, estimated_tokens: int
-    ) -> Decision:
         if not tenant_key or estimated_tokens <= 0:
             raise ValueError("tenant_key and estimated_tokens must be positive")
         request_id = uuid.uuid4().hex
@@ -60,7 +53,6 @@ class TokenLimiter:
         try:
             # The up-front write lock makes usage-read plus reservation-insert atomic.
             await connection.execute("BEGIN IMMEDIATE")
-            await connection.execute("DELETE FROM token_usage WHERE ts_ms <= ?", (cutoff_ms,))
             row = await (
                 await connection.execute(
                     "SELECT COALESCE(SUM(tokens), 0), MIN(ts_ms) "
@@ -70,6 +62,11 @@ class TokenLimiter:
             ).fetchone()
             current_usage = int(row[0])
             oldest_ms = row[1]
+            # Test-only scheduling probe. Zero in production; a non-zero value makes
+            # a deferred-transaction read/write race deterministic in mutation tests.
+            if self._race_probe_delay:
+                await asyncio.sleep(self._race_probe_delay)
+            await connection.execute("DELETE FROM token_usage WHERE ts_ms <= ?", (cutoff_ms,))
             if current_usage + estimated_tokens > self.limit:
                 await connection.commit()
                 retry_after = (
