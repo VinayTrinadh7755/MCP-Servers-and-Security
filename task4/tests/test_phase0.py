@@ -37,7 +37,11 @@ async def test_two_connections_open_concurrently(tmp_path) -> None:
     try:
         for connection in (first, second):
             timeout = await (await connection.execute("PRAGMA busy_timeout")).fetchone()
+            journal_limit = await (
+                await connection.execute("PRAGMA journal_size_limit")
+            ).fetchone()
             assert timeout[0] == 5000
+            assert journal_limit[0] == 4_194_304
     finally:
         await asyncio.gather(first.close(), second.close())
 

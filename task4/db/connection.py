@@ -33,6 +33,9 @@ async def connect(path: Path | str | None = None) -> aiosqlite.Connection:
         # A concurrent writer waits briefly instead of failing immediately.
         await connection.execute("PRAGMA busy_timeout=5000")
         await connection.execute("PRAGMA foreign_keys=ON")
+        # Bound retained WAL bytes after checkpoints; active transactions can
+        # temporarily exceed this threshold until a checkpoint is possible.
+        await connection.execute("PRAGMA journal_size_limit=4194304")
         return connection
     except BaseException:
         await connection.close()

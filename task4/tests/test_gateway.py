@@ -3,12 +3,13 @@ from __future__ import annotations
 import logging
 import sqlite3
 import asyncio
+import io
 
 import httpx
 import pytest
 import pytest_asyncio
 
-from task4.app import app
+from task4.app import app, logger
 from task4.router import ProviderFailure
 
 
@@ -27,20 +28,29 @@ async def client(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_provider_failure_releases_reservation_and_leaks_nothing(client, caplog) -> None:
+async def test_provider_failure_releases_reservation_and_leaks_nothing(client) -> None:
     app.state.router = FailedRouter()
-    with caplog.at_level(logging.ERROR, logger="task4.gateway"):
+    log_stream = io.StringIO()
+    log_handler = logging.StreamHandler(log_stream)
+    logger.addHandler(log_handler)
+    try:
         response = await client.post(
             "/v1/completions",
             headers={"x-tenant-key": "tenant-a"},
             json={"prompt": "hello", "max_tokens": 10},
         )
+    finally:
+        logger.removeHandler(log_handler)
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "PROVIDER_UNAVAILABLE"
     body = response.text.casefold()
     for forbidden in ("provider.internal", "secret.py", "httpx", "traceback", "providerfailure"):
         assert forbidden not in body
     assert "request_id" in response.json()["error"]
+    server_log = log_stream.getvalue()
+    assert response.json()["error"]["request_id"] in server_log
+    assert "provider.internal" in server_log
+    assert "secret.py" in server_log
 
 
 @pytest.mark.asyncio

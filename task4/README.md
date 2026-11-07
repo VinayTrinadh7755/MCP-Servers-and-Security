@@ -7,9 +7,7 @@ The local provider fixtures make every scored path reproducible without credenti
 ## Run
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m uvicorn task4.app:app --host 127.0.0.1 --port 8200
+powershell.exe -ExecutionPolicy Bypass -File .\task4\scripts\run_both.ps1
 ```
 
 In another terminal:
@@ -20,14 +18,8 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8200/v1/completions `
   -Body '{"prompt":"hello","max_tokens":50}'
 ```
 
+The launcher starts both services, prints their URLs, and stops both on Ctrl+C.
 The response identifies the provider, actual usage, and whether fallback occurred.
-
-Run the controllable provider fixture separately when inspecting it:
-
-```powershell
-.\.venv\Scripts\python.exe -m uvicorn task4.providers.mock_provider:app `
-  --host 127.0.0.1 --port 8201
-```
 
 The fixture routes are `/primary/v1/completions` and
 `/secondary/v1/completions`. Select `normal`, `429`, `hang`, `slow`, or `500`
@@ -104,8 +96,9 @@ high-volume production traffic should move cleanup off the hot path.
 
 A client-cancelled handler releases its reservation. An abrupt process kill cannot
 run cleanup, so the estimate remains charged until its 60-second row expires.
-SQLite's default WAL auto-checkpoint remains enabled; sustained production traffic
-should monitor WAL size and schedule explicit checkpoints if needed.
+SQLite's default 1,000-page WAL auto-checkpoint remains enabled and retained WAL
+bytes are limited to 4 MiB after checkpoints. Active transactions can temporarily
+exceed that threshold, so sustained production traffic must still monitor WAL size.
 
 Track provider latency, 429s, timeouts, fallback rate, limiter denials, SQLite lock
 time, and estimate-versus-actual drift.
