@@ -1,5 +1,36 @@
 # Task 3 — Streaming PII Guardrail
 
+## Phase delivery record
+
+### Phase 0 - Streaming foundation
+
+Created an OpenAI-compatible gateway and credential-free SSE provider, proved
+progressive relay, preserved SSE framing, configured timeouts, and added Windows
+and POSIX launchers.
+
+### Phase 1 - Offline redactor
+
+Built the request-scoped bounded-state redactor for emails, SSNs, and card numbers,
+including cross-chunk matches and Luhn validation without network dependencies.
+
+### Phase 2 - Live stream integration
+
+Integrated incremental UTF-8/SSE decoding, content-delta rewriting, metadata and
+finish-reason preservation, `[DONE]` handling, and fail-closed malformed/upstream
+error behavior.
+
+### Phase 3 - Concurrency and performance hardening
+
+Proved request isolation under 50 concurrent mixed streams, bounded carry state,
+all UTF-8 split boundaries, disconnect cancellation, timeout behavior, and linear
+scaling. The documented short-response TTFT limitation remains explicit.
+
+### Phase 4 - Finish and validation
+
+Completed provider fixtures, benchmarks, mutation checks, clean-clone and ARM64
+verification, operational guidance, and trade-offs. Final focused result: **101
+tests passed**.
+
 Task 3 is complete. It provides a reproducible mock provider, a bounded
 network-free `StreamRedactor`, and a streaming gateway that applies redaction
 only to parsed OpenAI content deltas.

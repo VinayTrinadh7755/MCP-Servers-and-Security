@@ -1,5 +1,38 @@
 # Task 4 — Rate-Limiting and Model Fallback Router
 
+## Phase delivery record
+
+### Phase 0 - SQLite and provider foundation
+
+Pinned `aiosqlite`, created the indexed on-disk usage schema, enabled WAL, a
+five-second busy timeout and bounded retained WAL bytes, and added controllable
+primary/secondary provider fixtures.
+
+### Phase 1 - Gateway contracts
+
+Defined limiter and router interfaces, completion request/result models, one stable
+error envelope, request correlation IDs, strict request parsing, and lifecycle-owned
+HTTP resources.
+
+### Phase 2 - Atomic limiting and fallback
+
+Implemented a 60-second, 50,000-token tenant window using `BEGIN IMMEDIATE`,
+estimate-before-call reservations, actual-token reconciliation, primary fallback
+on 429 or three-second timeout, and an independently bounded secondary.
+
+### Phase 3 - Hardening
+
+Proved the lock with a destructive mutation, added two-process contention,
+tenant isolation, global eviction, omitted-`max_tokens` protection, client-cancel
+cleanup, network-level provider disconnect proof, rate headers, and sanitized but
+diagnosable failures.
+
+### Phase 4 - Finish and validation
+
+Completed launchers, failover and accounting decisions, production limitations,
+cross-platform clean-clone validation, and the shared project runbook. Final
+focused result: **32 tests passed**.
+
 All phases are complete. The gateway provides a per-tenant 50,000-token sliding
 minute, atomic SQLite reservations, and bounded primary-to-secondary failover.
 The local provider fixtures make every scored path reproducible without credentials.

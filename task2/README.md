@@ -1,5 +1,36 @@
 # Task 2: MCP Security Gateway
 
+## Phase delivery record
+
+### Phase 0 - Foundation
+
+Created the FastAPI gateway and downstream mock, pinned the shared dependencies,
+added health endpoints, cross-platform launchers, and a real two-service smoke test.
+
+### Phase 1 - Transparent proxy structure
+
+Implemented bounded JSON request parsing, JSON-RPC envelope validation, request-ID
+preservation, configurable downstream forwarding, response-size limits, timeouts,
+and sanitized downstream failures.
+
+### Phase 2 - Authorization policy
+
+Added exact Bearer-token resolution and method-level policy. `tools/list` forwards
+for authenticated roles; ordinary tool calls forward; `admin_*` tools require the
+admin role; denied calls return JSON-RPC `-32001` without contacting downstream.
+
+### Phase 3 - Bypass resistance
+
+Covered malformed names, case changes, whitespace, duplicate headers and JSON keys,
+batch-shaped payloads, oversized bodies, spoofed role fields, unsupported methods,
+concurrency, and audit-log sanitization.
+
+### Phase 4 - Finish and validation
+
+Completed the threat model, policy matrix, runbook, clean-clone test, production
+limitations, and live integration coverage. Final focused result: **54 tests
+passed**.
+
 This task implements a small HTTP/JSON-RPC security gateway between an MCP client and a mock downstream MCP service. The gateway resolves a static Bearer token to a role, makes an authorization decision before forwarding, and blocks non-admin callers from invoking tools whose names begin with `admin_`. The mock downstream exposes four tools and logs every request, which makes non-forwarding on a deny path independently observable.
 
 ## Clean-clone verification

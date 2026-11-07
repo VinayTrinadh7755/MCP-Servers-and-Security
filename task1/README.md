@@ -1,5 +1,38 @@
 # Customer Operations MCP Server
 
+## Phase delivery record
+
+### Phase 0 - Foundation
+
+Pinned the official Python MCP SDK and Pydantic, created the stdio server and SDK
+driver, routed logs exclusively to stderr, and proved a clean initialize/list-tools
+round trip with no tools registered yet.
+
+### Phase 1 - Strict contracts
+
+Added `get_customer_record` and `trigger_refund` schemas. Customer IDs require
+`CUST-` plus five ASCII digits; refund amounts are strict positive numbers; reasons
+require at least ten characters; and unknown fields are rejected.
+
+### Phase 2 - Tool behavior
+
+Implemented deterministic customer fixtures and refund processing with Decimal
+arithmetic, customer-status checks, refund limits, stable success payloads, and
+business failures returned as tool results rather than transport failures.
+
+### Phase 3 - Protocol hardening
+
+Mapped malformed tool arguments to JSON-RPC `-32602`, preserved request IDs,
+verified unknown methods and malformed envelopes, and added a mechanical stdout
+purity test with a contamination self-test proving the detector fails when it
+should.
+
+### Phase 4 - Finish and validation
+
+Completed clean-clone instructions, logging and PII guidance, design decisions,
+trade-offs, and integration tests using the official SDK. Final focused result:
+**14 tests passed**.
+
 A Python MCP server exposing strict customer-record and refund tools over stdio.
 It uses the official MCP SDK, validates arguments before tool execution, separates
 JSON-RPC protocol errors from business failures, and keeps all logs off the protocol
@@ -239,24 +272,20 @@ store keeps the submission focused and reproducible.
   logs exclude it. Production should define retention, classification, and masking
   rules before persisting agent-supplied text.
 - **Portability:** tests use `pathlib`, `sys.executable`, explicit UTF-8, and text
-  mode, but this submission was executed on Windows rather than Linux or macOS.
+  mode; the final suite passed on Windows x64 and Ubuntu ARM64.
 
 ## Project Layout
 
 ```text
 task1/
-├── server.py
-├── models.py
-├── store.py
-├── scripts/
-│   └── drive.py
-├── tests/
-│   ├── protocol.py
-│   ├── test_stdout_purity.py
-│   └── test_validation.py
-├── PHASE_0.md
-├── PHASE_1.md
-├── PHASE_2.md
-├── PHASE_3.md
-└── README.md
+|-- server.py
+|-- models.py
+|-- store.py
+|-- scripts/
+|   `-- drive.py
+|-- tests/
+|   |-- protocol.py
+|   |-- test_stdout_purity.py
+|   `-- test_validation.py
+`-- README.md
 ```
