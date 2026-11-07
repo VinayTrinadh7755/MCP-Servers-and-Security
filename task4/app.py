@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import uuid
 from contextlib import asynccontextmanager
 from json import JSONDecodeError
 from typing import AsyncIterator
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -17,7 +19,7 @@ from fastapi.responses import JSONResponse
 from task4.db.connection import init
 from task4.errors import error_response
 from task4.limiter import TokenLimiter
-from task4.router import CompletionRequest, ModelRouter
+from task4.router import CompletionRequest, ModelRouter, ProviderFailure
 
 
 logger = logging.getLogger("task4.gateway")
@@ -31,22 +33,61 @@ logger.propagate = False
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    await init()
-    app.state.limiter = TokenLimiter()
-    app.state.router = ModelRouter()
-    yield
+    path = await init()
+    client = httpx.AsyncClient(
+        timeout=None,
+        trust_env=False,
+        limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+    )
+    app.state.limiter = TokenLimiter(
+        limit=int(os.getenv("TASK4_TOKEN_LIMIT", "50000")), path=path
+    )
+    app.state.router = ModelRouter(
+        client,
+        os.getenv(
+            "TASK4_PRIMARY_URL", "http://127.0.0.1:8201/primary/v1/completions"
+        ),
+        os.getenv(
+            "TASK4_SECONDARY_URL", "http://127.0.0.1:8201/secondary/v1/completions"
+        ),
+        float(os.getenv("TASK4_PRIMARY_TIMEOUT_SECONDS", "3.0")),
+        float(os.getenv("TASK4_SECONDARY_TIMEOUT_SECONDS", "3.0")),
+    )
+    try:
+        yield
+    finally:
+        await client.aclose()
 
 
 app = FastAPI(title="Task 4 Rate-Limit and Fallback Gateway", lifespan=lifespan)
+MAX_BODY_BYTES = 65_536
+MAX_TENANT_KEY_LENGTH = 256
 
 
 def gateway_error(
-    request_id: str, code: str, message: str, status_code: int
+    request_id: str,
+    code: str,
+    message: str,
+    status_code: int,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     logger.warning("event=request_rejected request_id=%s code=%s", request_id, code)
-    return error_response(
+    response = error_response(
         code=code, message=message, request_id=request_id, status_code=status_code
     )
+    if headers:
+        response.headers.update(headers)
+    return response
+
+
+def rate_headers(current_usage: int, limit: int, retry_after: int | None = None) -> dict[str, str]:
+    headers = {
+        "x-ratelimit-limit-tokens": str(limit),
+        "x-ratelimit-remaining-tokens": str(max(0, limit - current_usage)),
+    }
+    if retry_after is not None:
+        headers["retry-after"] = str(retry_after)
+    return headers
 
 
 @app.exception_handler(RequestValidationError)
@@ -82,13 +123,27 @@ async def completions(request: Request) -> JSONResponse:
     request_id = uuid.uuid4().hex
     request.state.request_id = request_id
     tenant_key = request.headers.get("x-tenant-key")
-    if tenant_key is None or not tenant_key.strip():
+    if (
+        tenant_key is None
+        or not tenant_key.strip()
+        or len(tenant_key) > MAX_TENANT_KEY_LENGTH
+    ):
         return gateway_error(
             request_id, "MISSING_TENANT_KEY", "x-tenant-key header is required", 401
         )
 
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_BODY_BYTES or int(content_length) < 0:
+                return gateway_error(request_id, "INVALID_REQUEST", "Request body is too large", 413)
+        except ValueError:
+            return gateway_error(request_id, "INVALID_REQUEST", "Invalid content length", 400)
+    raw_body = await request.body()
+    if len(raw_body) > MAX_BODY_BYTES:
+        return gateway_error(request_id, "INVALID_REQUEST", "Request body is too large", 413)
     try:
-        payload = json.loads(await request.body())
+        payload = json.loads(raw_body)
     except (JSONDecodeError, UnicodeDecodeError):
         return gateway_error(request_id, "INVALID_JSON", "Request body must be valid JSON", 400)
     if not isinstance(payload, dict):
@@ -110,14 +165,32 @@ async def completions(request: Request) -> JSONResponse:
             400,
         )
 
-    estimated_tokens = len(prompt) // 4 + 1 + max_tokens
+    # Reproducible estimate; a production adapter would use the model tokenizer.
+    estimated_tokens = (len(prompt) + 3) // 4 + max_tokens
     decision = await request.app.state.limiter.try_reserve(
         tenant_key.strip(), estimated_tokens
     )
     if not decision.allowed:
-        return gateway_error(request_id, "RATE_LIMITED", "Token limit exceeded", 429)
+        return gateway_error(
+            request_id,
+            "RATE_LIMITED",
+            "Token limit exceeded",
+            429,
+            rate_headers(decision.current_usage, decision.limit, decision.retry_after_seconds),
+        )
 
-    result = await request.app.state.router.complete(CompletionRequest(prompt, max_tokens))
+    try:
+        result = await request.app.state.router.complete(CompletionRequest(prompt, max_tokens))
+    except ProviderFailure:
+        await request.app.state.limiter.release(decision.request_id)
+        logger.exception("event=providers_failed request_id=%s", request_id)
+        return gateway_error(
+            request_id,
+            "PROVIDER_UNAVAILABLE",
+            "Completion providers unavailable",
+            503,
+            rate_headers(decision.current_usage - estimated_tokens, decision.limit),
+        )
     await request.app.state.limiter.reconcile(
         decision.request_id, result.prompt_tokens + result.completion_tokens
     )
@@ -132,7 +205,15 @@ async def completions(request: Request) -> JSONResponse:
             },
             "failed_over": result.failed_over,
         },
-        headers={"x-request-id": request_id},
+        headers={
+            "x-request-id": request_id,
+            **rate_headers(
+                decision.current_usage - estimated_tokens
+                + result.prompt_tokens
+                + result.completion_tokens,
+                decision.limit,
+            ),
+        },
     )
 
 

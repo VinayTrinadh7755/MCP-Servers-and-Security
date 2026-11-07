@@ -7,8 +7,14 @@ import pytest
 import pytest_asyncio
 
 from task4.app import app
+from task4.db.connection import init
 from task4.limiter import TokenLimiter
-from task4.router import CompletionRequest, ModelRouter
+from task4.router import CompletionRequest, CompletionResult
+
+
+class StubRouter:
+    async def complete(self, request: CompletionRequest) -> CompletionResult:
+        return CompletionResult("primary", f"stub completion: {request.prompt}", 2, 4, False)
 
 
 @pytest_asyncio.fixture
@@ -16,18 +22,22 @@ async def client(tmp_path, monkeypatch):
     monkeypatch.setenv("TASK4_DATABASE_PATH", str(tmp_path / "usage.db"))
     transport = httpx.ASGITransport(app=app)
     async with app.router.lifespan_context(app):
+        app.state.router = StubRouter()
         async with httpx.AsyncClient(transport=transport, base_url="http://gateway") as value:
             yield value
 
 
 @pytest.mark.asyncio
-async def test_contracts_expose_required_phase1_fields() -> None:
-    decision = await TokenLimiter().try_reserve("tenant-a", 100)
-    result = await ModelRouter().complete(CompletionRequest("hello", 50))
+async def test_contracts_expose_required_phase1_fields(tmp_path) -> None:
+    # Contract fields remain stable after the Phase 2 implementation replaces stubs.
+    path = tmp_path / "usage.db"
+    await init(path)
+    decision = await TokenLimiter(limit=100, path=path).try_reserve("tenant-a", 100)
+    result = await StubRouter().complete(CompletionRequest("hello", 50))
     assert decision.allowed is True
     assert (decision.current_usage, decision.limit, decision.retry_after_seconds) == (
-        0,
-        50_000,
+        100,
+        100,
         None,
     )
     assert result.provider == "primary"

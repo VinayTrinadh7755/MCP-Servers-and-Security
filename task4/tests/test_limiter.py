@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+import asyncio
+import sqlite3
+
+import pytest
+
+from task4.db.connection import init
+from task4.limiter import TokenLimiter
+
+
+@pytest.mark.asyncio
+async def test_fifty_concurrent_reservations_never_exceed_cap(tmp_path) -> None:
+    path = tmp_path / "usage.db"
+    await init(path)
+    limiter = TokenLimiter(limit=50_000, path=path)
+    decisions = await asyncio.gather(
+        *(limiter.try_reserve("tenant-a", 1_000) for _ in range(60))
+    )
+    admitted = [decision for decision in decisions if decision.allowed]
+    denied = [decision for decision in decisions if not decision.allowed]
+    assert len(admitted) == 50
+    assert len(denied) == 10
+    assert sum(1_000 for _ in admitted) == 50_000
+    assert all(decision.current_usage == 50_000 for decision in denied)
+
+
+@pytest.mark.asyncio
+async def test_exact_limit_reconcile_overage_and_release(tmp_path) -> None:
+    path = tmp_path / "usage.db"
+    await init(path)
+    limiter = TokenLimiter(limit=100, path=path)
+    exact = await limiter.try_reserve("tenant-a", 100)
+    assert exact.allowed
+    await limiter.reconcile(exact.request_id, 110)
+    denied = await limiter.try_reserve("tenant-a", 1)
+    assert not denied.allowed
+
+    other = await limiter.try_reserve("tenant-b", 100)
+    assert other.allowed
+    await limiter.release(other.request_id)
+    replacement = await limiter.try_reserve("tenant-b", 100)
+    assert replacement.allowed
+
+
+@pytest.mark.asyncio
+async def test_window_slides_at_exact_boundary_and_reports_retry_after(tmp_path) -> None:
+    path = tmp_path / "usage.db"
+    await init(path)
+    now = [1_000_000]
+    limiter = TokenLimiter(limit=100, window_ms=60_000, path=path, clock_ms=lambda: now[0])
+    assert (await limiter.try_reserve("tenant-a", 100)).allowed
+    now[0] += 59_001
+    denied = await limiter.try_reserve("tenant-a", 1)
+    assert not denied.allowed
+    assert denied.retry_after_seconds == 1
+    now[0] += 999
+    assert (await limiter.try_reserve("tenant-a", 100)).allowed
+
+
+@pytest.mark.asyncio
+async def test_tenant_isolation_and_eviction_bound_storage(tmp_path) -> None:
+    path = tmp_path / "usage.db"
+    await init(path)
+    now = [1_000_000]
+    limiter = TokenLimiter(limit=10, window_ms=100, path=path, clock_ms=lambda: now[0])
+    assert (await limiter.try_reserve("tenant-a", 10)).allowed
+    assert (await limiter.try_reserve("tenant-b", 10)).allowed
+    assert not (await limiter.try_reserve("tenant-a", 1)).allowed
+
+    for index in range(250):
+        now[0] += 101
+        assert (await limiter.try_reserve(f"tenant-{index}", 1)).allowed
+    connection = sqlite3.connect(path)
+    try:
+        count = connection.execute("SELECT COUNT(*) FROM token_usage").fetchone()[0]
+    finally:
+        connection.close()
+    assert count == 1
